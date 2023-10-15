@@ -1,5 +1,7 @@
 package com.example.demo.test;
 
+import com.example.demo.test.dto.SquadEvaluation;
+import com.example.demo.test.dto.TempAnswer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.thesis.qnabot.api.embedding.adapter.out.dto.pinecone.PineconeFindKNearestRequestDto;
 import com.thesis.qnabot.api.embedding.application.ChatBotService;
@@ -25,17 +27,22 @@ import java.util.stream.Collectors;
 public class TestController {
 
     private final ChatBotService chatBotService;
+    private final ApiKeysConfig apiKeysConfig;
 
-    public TestController(final ChatBotService chatBotService) {
+    public TestController(
+            final ChatBotService chatBotService,
+            final ApiKeysConfig apiKeysConfig
+    ) {
+        this.apiKeysConfig = apiKeysConfig;
         this.chatBotService = chatBotService;
         this.chatBotService.setEmbeddingModel(EmbeddingModel.OPEN_AI);
-        this.chatBotService.setEmbeddingApiKey("api-key");
+        this.chatBotService.setEmbeddingApiKey(apiKeysConfig.getOpenAiKey());
 
         this.chatBotService.setCompletionModel(CompletionModel.OPEN_AI);
-        this.chatBotService.setCompletionApiKey("api-key");
+        this.chatBotService.setCompletionApiKey(apiKeysConfig.getOpenAiKey());
 
         this.chatBotService.setVectorDatabaseModel(VectorDatabaseModel.PINECONE);
-        this.chatBotService.setVectorDatabaseApiKey("api-key");
+        this.chatBotService.setVectorDatabaseApiKey(apiKeysConfig.getPineconeKey());
 
         this.chatBotService.setChunkModel(ChunkModel.SENTENCES);
         this.chatBotService.setChunkSize(7);

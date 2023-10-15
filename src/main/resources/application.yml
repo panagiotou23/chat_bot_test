@@ -1,0 +1,9 @@
+spring:
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+
+open-ai-key: ${OPENAI_KEY:api-key}
+npl-cloud-key: ${NPL_CLOUD_KEY:api-key}
+pinecone-key: ${PINECONE_KEY:api-key}
