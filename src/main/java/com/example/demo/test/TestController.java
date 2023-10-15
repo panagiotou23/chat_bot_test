@@ -99,10 +99,18 @@ public class TestController {
 
 
         final var result = new StringBuilder();
+
+        result.append("Embedding Model,")
+                .append("Completion Model,")
+                .append("KNN Algorithm,")
+                .append("Chunking Model,")
+                .append("Wins,")
+                .append("Misses")
+                .append("\n");
         for (final var embeddingModel : EmbeddingModel.values()) {
-            for (final var knnAlgorithm : KnnAlgorithm.values()) {
-                for (final var chunkModel : ChunkModel.values()) {
-                    for (final var completionModel : CompletionModel.values()) {
+            for (final var completionModel : CompletionModel.values()) {
+                for (final var knnAlgorithm : KnnAlgorithm.values()) {
+                    for (final var chunkModel : ChunkModel.values()) {
                         final var wins = paragraphScores.stream()
                                 .filter(s ->
                                         s.getEmbeddingModel().equals(embeddingModel) &&
@@ -120,25 +128,18 @@ public class TestController {
                                 ).mapToDouble(ParagraphScore::getMisses)
                                 .sum();
 
-                        result.append("Embedding Model: ")
-                                .append(embeddingModel)
-                                .append("\t")
-                                .append("Completion Model: ")
+                        result.append(embeddingModel)
+                                .append(",")
                                 .append(completionModel)
-                                .append("\t")
-                                .append("KNN Algorithm: ")
+                                .append(",")
                                 .append(knnAlgorithm)
-                                .append("\t")
-                                .append("Chunking Model: ")
+                                .append(",")
                                 .append(chunkModel)
-                                .append("\n")
-                                .append("Wins: ")
+                                .append(",")
                                 .append(wins)
-                                .append("\t")
-                                .append("Misses: ")
+                                .append(",")
                                 .append(misses)
-                                .append("\n\n");
-
+                                .append("\n");
                     }
                 }
             }
