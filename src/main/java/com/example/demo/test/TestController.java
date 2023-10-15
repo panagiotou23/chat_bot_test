@@ -1,7 +1,9 @@
 package com.example.demo.test;
 
 import com.example.demo.test.dto.SquadEvaluation;
-import com.example.demo.test.dto.TempAnswer;
+import com.example.demo.test.dto.SquadAnswer;
+import com.example.demo.test.dto.SquadParagraph;
+import com.example.demo.test.dto.SquadQa;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.thesis.qnabot.api.embedding.adapter.out.dto.pinecone.PineconeFindKNearestRequestDto;
 import com.thesis.qnabot.api.embedding.application.ChatBotService;
@@ -14,12 +16,8 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
-import org.springframework.web.multipart.MultipartFile;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @RestController
@@ -45,25 +43,24 @@ public class TestController {
         this.chatBotService.setVectorDatabaseApiKey(apiKeysConfig.getPineconeKey());
 
         this.chatBotService.setChunkModel(ChunkModel.SENTENCES);
-        this.chatBotService.setChunkSize(7);
-        this.chatBotService.setChunkOverlap(5);
+        this.chatBotService.setChunkSize(15);
+        this.chatBotService.setChunkOverlap(2);
 
         this.chatBotService.setKnnAlgorithm(KnnAlgorithm.COSINE);
     }
 
-    @PostMapping("/open-ai/embedding")
-    public void getEmbedding(
-            @RequestParam("file") MultipartFile file
-    ) {
-        chatBotService.createEmbeddings(file);
+    @PostMapping("/embedding")
+    public void saveEmbedding(@RequestParam String input) {
+        chatBotService.createEmbeddings("thesis", input);
     }
 
     @GetMapping("/open-ai/embedding")
     public List<Embedding> findKNearest(
+            @RequestParam String indexName,
             @RequestParam String query,
             @RequestParam int k
     ) {
-        return chatBotService.findKNearest(query, k);
+        return chatBotService.findKNearest(indexName, query, k);
     }
 
 
@@ -77,109 +74,226 @@ public class TestController {
             @RequestBody SquadEvaluation squadEvaluation
     ) {
 
-        if (databaseExists()) {
+        final var activeIndexes = getStillActiveIndexes();
+        if (!activeIndexes.isEmpty()) {
             try {
-                log.info("Deleting Vectorized Database");
-                chatBotService.deleteAllEmbeddings();
+                activeIndexes.forEach(indexName -> {
+                    log.info("Deleting Vectorized Database " + indexName);
+                    chatBotService.deleteAllEmbeddings(indexName);
+                });
             } catch (Exception e) {
                 log.error("Did not delete the existing DB", e);
             }
-            while (databaseExists()) {
-//                log.info("Database still here");
-                sleep(500);
+            while (!getStillActiveIndexes().isEmpty()) {
+                sleep(200);
             }
             log.info("Deleted Vectorized Database");
         }
 
-        AtomicInteger openAiWins = new AtomicInteger();
-        AtomicInteger openAiMisses = new AtomicInteger();
+        List<ParagraphScore> paragraphScores = new ArrayList<>();
 
         squadEvaluation.getData().forEach(data ->
-                data.getParagraphs().forEach(paragraph -> {
+                data.getParagraphs().forEach(paragraph ->
+                        paragraphScores.addAll(evaluateParagraph(paragraph))
+                ));
 
-                    log.info("Creating Vectorized Database");
-                    chatBotService.createDatabase();
-                    while (!databaseExists()) {
-//                        log.info("Database not ready");
-                        sleep(500);
+
+        final var result = new StringBuilder();
+        for (final var embeddingModel : EmbeddingModel.values()) {
+            for (final var knnAlgorithm : KnnAlgorithm.values()) {
+                for (final var chunkModel : ChunkModel.values()) {
+                    for (final var completionModel : CompletionModel.values()) {
+                        final var wins = paragraphScores.stream()
+                                .filter(s ->
+                                        s.getEmbeddingModel().equals(embeddingModel) &&
+                                                s.getKnnAlgorithm().equals(knnAlgorithm) &&
+                                                s.getChunkModel().equals(chunkModel) &&
+                                                s.getCompletionModel().equals(completionModel)
+                                ).mapToDouble(ParagraphScore::getWins)
+                                .sum();
+                        final var misses = paragraphScores.stream()
+                                .filter(s ->
+                                        s.getEmbeddingModel().equals(embeddingModel) &&
+                                                s.getKnnAlgorithm().equals(knnAlgorithm) &&
+                                                s.getChunkModel().equals(chunkModel) &&
+                                                s.getCompletionModel().equals(completionModel)
+                                ).mapToDouble(ParagraphScore::getMisses)
+                                .sum();
+
+                        result.append("Embedding Model: ")
+                                .append(embeddingModel)
+                                .append("\t")
+                                .append("Completion Model: ")
+                                .append(completionModel)
+                                .append("\t")
+                                .append("KNN Algorithm: ")
+                                .append(knnAlgorithm)
+                                .append("\t")
+                                .append("Chunking Model: ")
+                                .append(chunkModel)
+                                .append("\n")
+                                .append("Wins: ")
+                                .append(wins)
+                                .append("\t")
+                                .append("Misses: ")
+                                .append(misses)
+                                .append("\n\n");
+
                     }
-                    log.info("Created Vectorized Database");
-
-                    while (!indexIsReadyForRequest()) {
-//                        log.info("Index is not ready for requests");
-                        sleep(500);
-                    }
-                    log.info("Index ready for requests");
-                    chatBotService.createEmbeddings(paragraph.getContext());
-
-                    while (!indexIsParsedTheEmbeddings()) {
-//                        log.info("Index hasn't parsed the embeddings yet");
-                        sleep(500);
-                    }
-                    log.info("Index parsed the embeddings");
-                    sleep(1000);
-                    paragraph.getQas().forEach(qa -> {
-                        log.info("Question: " + qa.getQuestion());
-                        final var answer = chatBotService.query(
-                                QueryCompletionModelRequest.builder()
-                                        .k(5)
-                                        .query(qa.getQuestion())
-                                        .build()
-                        );
-                        log.info("Answer: " + answer);
-                        log.info("Given Answers: " +
-                                String.join(" || ", qa.getAnswers().stream()
-                                        .map(TempAnswer::getText)
-                                        .collect(Collectors.toSet()))
-                        );
-                        if (qa.getIs_impossible()) {
-                            if (answer.equalsIgnoreCase("I don't know the answer.")) {
-                                openAiWins.addAndGet(1);
-                            } else {
-                                openAiMisses.addAndGet(1);
-                            }
-
-                        } else {
-                            if (
-                                    qa.getAnswers().stream().anyMatch(givenAnswer ->
-                                            answer.contains(givenAnswer.getText()) || givenAnswer.getText().contains(answer)
-                                    )
-                            ) {
-                                openAiWins.addAndGet(1);
-                            } else {
-                                openAiMisses.addAndGet(1);
-                            }
-                        }
-
-                        log.info("");
-                        log.info("Current wins: " + openAiWins);
-                        log.info("Current misses: " + openAiMisses);
-                        log.info("");
-                        log.info("");
-
-                        sleep(2000);
-
-                    });
-
-                    log.info("Deleting Vectorized Database");
-                    chatBotService.deleteAllEmbeddings();
-                    while (databaseExists()) {
-//                        log.info("Database still here");
-                        sleep(500);
-                    }
-                    log.info("Deleted Vectorized Database");
-
-                }));
-
-        return "OpenAi Wins: " + openAiWins + "\nOpenAi Misses: " + openAiMisses;
+                }
+            }
+        }
+        log.info(paragraphScores.toString());
+        return result.toString();
     }
 
-    private boolean indexIsParsedTheEmbeddings() {
+    private List<ParagraphScore> evaluateParagraph(SquadParagraph paragraph) {
+        final var scores = new ArrayList<ParagraphScore>();
+
+        for (final var embeddingModel : EmbeddingModel.values()) {
+            for (final var knnAlgorithm : KnnAlgorithm.values()) {
+                for (final var chunkModel : ChunkModel.values()) {
+
+                    chatBotService.setEmbeddingModel(embeddingModel);
+                    chatBotService.setKnnAlgorithm(knnAlgorithm);
+                    chatBotService.setChunkModel(chunkModel);
+                    if (embeddingModel.equals(EmbeddingModel.OPEN_AI)) {
+                        chatBotService.setEmbeddingApiKey(apiKeysConfig.getOpenAiKey());
+                    } else {
+                        chatBotService.setEmbeddingApiKey(apiKeysConfig.getNplCloudKey());
+                    }
+
+
+                    final var indexName = "thesis-" +
+                            embeddingModel.getStringValue() + "-" +
+                            knnAlgorithm.getStringValue() + "-" +
+                            chunkModel.getStringValue();
+                    createIndex(indexName, paragraph.getContext());
+
+
+                    for (final var completionModel : CompletionModel.values()) {
+
+                        chatBotService.setCompletionModel(completionModel);
+                        if (completionModel.equals(CompletionModel.OPEN_AI)) {
+                            chatBotService.setCompletionApiKey(apiKeysConfig.getOpenAiKey());
+                        } else {
+                            chatBotService.setCompletionApiKey(apiKeysConfig.getNplCloudKey());
+                        }
+
+                        final var score = ParagraphScore.builder()
+                                .wins(0)
+                                .misses(0)
+                                .paragraphContext(paragraph.getContext())
+                                .embeddingModel(embeddingModel)
+                                .completionModel(completionModel)
+                                .knnAlgorithm(knnAlgorithm)
+                                .chunkModel(chunkModel)
+                                .build();
+                        paragraph.getQas().forEach(qa ->
+                                evaluateQa(indexName, qa, score)
+                        );
+
+                        scores.add(score);
+                    }
+
+                    deleteIndex(indexName);
+                }
+            }
+        }
+        return scores;
+    }
+
+    private void evaluateQa(String indexName, SquadQa qa, ParagraphScore score) {
+        log.info("Question: " + qa.getQuestion());
+        final var answer = chatBotService.query(
+                QueryCompletionModelRequest.builder()
+                        .indexName(indexName)
+                        .k(5)
+                        .query(qa.getQuestion())
+                        .build()
+        );
+        log.info("Answer: " + answer);
+        log.info("Given Answers: " +
+                String.join(" || ", qa.getAnswers().stream()
+                        .map(SquadAnswer::getText)
+                        .collect(Collectors.toSet()))
+        );
+        if (qa.getIs_impossible()) {
+            if (answer.equalsIgnoreCase("I don't know the answer.")) {
+                score.countWin();
+            } else {
+                score.countMiss();
+            }
+
+        } else {
+            if (
+                    qa.getAnswers().stream().anyMatch(givenAnswer ->
+                            answer.contains(givenAnswer.getText()) || givenAnswer.getText().contains(answer)
+                    )
+            ) {
+                score.countWin();
+            } else {
+                score.countMiss();
+            }
+        }
+
+        log.info("");
+        log.info("Current wins: " + score.getWins());
+        log.info("Current misses: " + score.getMisses());
+        log.info("");
+        log.info("");
+    }
+
+    private void createIndex(String indexName, String context) {
+        log.info("Creating Vectorized Database " + indexName);
+        chatBotService.createDatabase(indexName);
+        while (!getStillActiveIndexes().contains(indexName)) {
+            sleep(500);
+        }
+        log.info("Created Vectorized Database");
+
+        while (!indexIsReadyForRequest(indexName)) {
+            sleep(500);
+        }
+        log.info("Index ready for requests");
+        sleep(500);
+
+        boolean embeddingsStored = false;
+        int retryAttempts = 0;
+        while (!embeddingsStored || retryAttempts > 10) {
+            try {
+                chatBotService.createEmbeddings(indexName, context);
+                embeddingsStored = true;
+            } catch (Exception e) {
+                log.warn("Could not save embeddings. Retry attempt: " + retryAttempts++);
+                sleep(200);
+            }
+        }
+        if (!embeddingsStored) {
+            throw new RuntimeException("Could not save embeddings");
+        }
+
+        while (!indexHasParsedTheEmbeddings(indexName)) {
+            sleep(500);
+        }
+        log.info("Index parsed the embeddings");
+    }
+
+    private void deleteIndex(String indexName) {
+        log.info("Deleting Vectorized Database " + indexName);
+        chatBotService.deleteAllEmbeddings(indexName);
+        while (getStillActiveIndexes().contains(indexName)) {
+            sleep(500);
+        }
+        log.info("Deleted Vectorized Database " + indexName);
+    }
+
+    private boolean indexHasParsedTheEmbeddings(String indexName) {
         HttpHeaders headers = new HttpHeaders();
         headers.add("Api-Key", chatBotService.getVectorDatabaseApiKey());
         headers.add("accept", "application/json");
         headers.add("Content-Type", "application/json");
-        final var url = "https://thesis-83dacea.svc.gcp-starter.pinecone.io/query";
+        final var url = "https://" + indexName + "-63159e9.svc.eu-west4-gcp.pinecone.io/query";
 
         final var body = PineconeFindKNearestRequestDto.builder()
                 .vector(new ArrayList<>(
@@ -200,13 +314,13 @@ public class TestController {
 
     }
 
-    private boolean indexIsReadyForRequest() {
+    private boolean indexIsReadyForRequest(String indexName) {
         try {
             HttpHeaders headers = new HttpHeaders();
             headers.add("Api-Key", chatBotService.getVectorDatabaseApiKey());
             headers.add("accept", "application/json");
             headers.add("Content-Type", "application/json");
-            final var url = "https://thesis-83dacea.svc.gcp-starter.pinecone.io/describe_index_stats";
+            final var url = "https://" + indexName + "-63159e9.svc.eu-west4-gcp.pinecone.io/describe_index_stats";
 
             final var restTemplate = new RestTemplate();
 
@@ -222,12 +336,12 @@ public class TestController {
         }
     }
 
-    private boolean databaseExists() {
+    private List<String> getStillActiveIndexes() {
         HttpHeaders headers = new HttpHeaders();
         headers.add("Api-Key", chatBotService.getVectorDatabaseApiKey());
         headers.add("accept", "application/json");
         headers.add("Content-Type", "application/json");
-        final var url = "https://controller.gcp-starter.pinecone.io/databases";
+        final var url = "https://controller.eu-west4-gcp.pinecone.io/databases";
 
         final var restTemplate = new RestTemplate();
 
@@ -235,9 +349,13 @@ public class TestController {
                 url,
                 HttpMethod.GET,
                 new HttpEntity<>(headers),
-                JsonNode[].class
+                String[].class
         ).getBody();
-        return response.length != 0;
+
+        if (response == null) {
+            return Collections.emptyList();
+        }
+        return List.of(response);
     }
 
     private static void sleep(int millis) {

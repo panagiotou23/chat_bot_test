@@ -7,5 +7,5 @@ import java.util.List;
 @Data
 public class SquadEvaluation {
     private String version;
-    private List<TempData> data;
+    private List<SquadData> data;
 }

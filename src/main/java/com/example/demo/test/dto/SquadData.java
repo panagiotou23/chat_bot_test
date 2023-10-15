@@ -5,7 +5,7 @@ import lombok.Data;
 import java.util.List;
 
 @Data
-public class TempData {
+public class SquadData {
     private String title;
-    private List<TempParagraph> paragraphs;
+    private List<SquadParagraph> paragraphs;
 }

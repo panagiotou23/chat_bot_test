@@ -5,9 +5,9 @@ import lombok.Data;
 import java.util.List;
 
 @Data
-public class TempQa {
+public class SquadQa {
     private String question;
     private String id;
-    private List<TempAnswer> answers;
+    private List<SquadAnswer> answers;
     private Boolean is_impossible;
 }

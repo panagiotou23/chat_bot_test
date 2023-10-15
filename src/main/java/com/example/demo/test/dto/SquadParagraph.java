@@ -5,7 +5,7 @@ import lombok.Data;
 import java.util.List;
 
 @Data
-public class TempParagraph {
-    List<TempQa> qas;
+public class SquadParagraph {
+    List<SquadQa> qas;
     String context;
 }
