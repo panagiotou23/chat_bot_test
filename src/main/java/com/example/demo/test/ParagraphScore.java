@@ -25,11 +25,35 @@ public class ParagraphScore {
 
     private ChunkModel chunkModel;
 
+    private int chunkSize;
+
+    private int chunkOverlap;
+
+    private int k;
+
     public void countWin() {
         this.wins++;
     }
 
     public void countMiss() {
         this.misses++;
+    }
+
+    public boolean hasEqualValues(
+            EmbeddingModel embeddingModel,
+            CompletionModel completionModel,
+            KnnAlgorithm knnAlgorithm,
+            ChunkModel chunkModel,
+            Integer chunkSize,
+            Integer chunkOverlap,
+            Integer k
+    ) {
+        return this.embeddingModel.equals(embeddingModel) &&
+                this.knnAlgorithm.equals(knnAlgorithm) &&
+                this.chunkModel.equals(chunkModel) &&
+                this.completionModel.equals(completionModel) &&
+                this.chunkSize == chunkSize &&
+                this.chunkOverlap == chunkOverlap &&
+                this.k == k;
     }
 }

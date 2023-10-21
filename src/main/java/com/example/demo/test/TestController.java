@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 @RestController
@@ -26,6 +27,14 @@ public class TestController {
 
     private final ChatBotService chatBotService;
     private final ApiKeysConfig apiKeysConfig;
+
+    private final Map<Integer, Integer> CHUNK_SIZE_OVERLAP_PAIRS = Map.of(
+            10, 5,
+            15, 3,
+            20, 2
+    );
+
+    private final List<Integer> K_VALUES = List.of(1, 3, 5);
 
     public TestController(
             final ChatBotService chatBotService,
@@ -73,7 +82,6 @@ public class TestController {
     public String evaluate(
             @RequestBody SquadEvaluation squadEvaluation
     ) {
-
         final var activeIndexes = getStillActiveIndexes();
         if (!activeIndexes.isEmpty()) {
             try {
@@ -104,6 +112,8 @@ public class TestController {
                 .append("Completion Model,")
                 .append("KNN Algorithm,")
                 .append("Chunking Model,")
+                .append("K, ")
+                .append("Arbitrary Chunk Values, ")
                 .append("Wins,")
                 .append("Misses")
                 .append("\n");
@@ -111,35 +121,47 @@ public class TestController {
             for (final var completionModel : CompletionModel.values()) {
                 for (final var knnAlgorithm : KnnAlgorithm.values()) {
                     for (final var chunkModel : ChunkModel.values()) {
-                        final var wins = paragraphScores.stream()
-                                .filter(s ->
-                                        s.getEmbeddingModel().equals(embeddingModel) &&
-                                                s.getKnnAlgorithm().equals(knnAlgorithm) &&
-                                                s.getChunkModel().equals(chunkModel) &&
-                                                s.getCompletionModel().equals(completionModel)
-                                ).mapToDouble(ParagraphScore::getWins)
-                                .sum();
-                        final var misses = paragraphScores.stream()
-                                .filter(s ->
-                                        s.getEmbeddingModel().equals(embeddingModel) &&
-                                                s.getKnnAlgorithm().equals(knnAlgorithm) &&
-                                                s.getChunkModel().equals(chunkModel) &&
-                                                s.getCompletionModel().equals(completionModel)
-                                ).mapToDouble(ParagraphScore::getMisses)
-                                .sum();
+                        CHUNK_SIZE_OVERLAP_PAIRS.forEach((chunkSize, chunkOverlap) ->
+                                K_VALUES.forEach(k -> {
+                                    final var wins = paragraphScores.stream()
+                                            .filter(s ->
+                                                    s.hasEqualValues(
+                                                            embeddingModel,
+                                                            completionModel,
+                                                            knnAlgorithm,
+                                                            chunkModel,
+                                                            chunkSize,
+                                                            chunkOverlap,
+                                                            k
+                                                    )
+                                            ).mapToDouble(ParagraphScore::getWins)
+                                            .sum();
+                                    final var misses = paragraphScores.stream()
+                                            .filter(s ->
+                                                    s.hasEqualValues(
+                                                            embeddingModel,
+                                                            completionModel,
+                                                            knnAlgorithm,
+                                                            chunkModel,
+                                                            chunkSize,
+                                                            chunkOverlap,
+                                                            k
+                                                    )
+                                            ).mapToDouble(ParagraphScore::getMisses)
+                                            .sum();
 
-                        result.append(embeddingModel)
-                                .append(",")
-                                .append(completionModel)
-                                .append(",")
-                                .append(knnAlgorithm)
-                                .append(",")
-                                .append(chunkModel)
-                                .append(",")
-                                .append(wins)
-                                .append(",")
-                                .append(misses)
-                                .append("\n");
+                                    if (wins != 0 || misses != 0) {
+                                        result.append(embeddingModel).append(",")
+                                                .append(completionModel).append(",")
+                                                .append(knnAlgorithm).append(",")
+                                                .append(chunkModel).append(",")
+                                                .append(k).append(",")
+                                                .append(chunkSize).append(" & ").append(chunkOverlap).append(",")
+                                                .append(wins).append(",")
+                                                .append(misses).append("\n");
+                                    }
+
+                                }));
                     }
                 }
             }
@@ -154,94 +176,168 @@ public class TestController {
         for (final var embeddingModel : EmbeddingModel.values()) {
             for (final var knnAlgorithm : KnnAlgorithm.values()) {
                 for (final var chunkModel : ChunkModel.values()) {
-
-                    chatBotService.setEmbeddingModel(embeddingModel);
-                    chatBotService.setKnnAlgorithm(knnAlgorithm);
-                    chatBotService.setChunkModel(chunkModel);
-                    if (embeddingModel.equals(EmbeddingModel.OPEN_AI)) {
-                        chatBotService.setEmbeddingApiKey(apiKeysConfig.getOpenAiKey());
-                    } else {
-                        chatBotService.setEmbeddingApiKey(apiKeysConfig.getNplCloudKey());
-                    }
-
-
-                    final var indexName = "thesis-" +
-                            embeddingModel.getStringValue() + "-" +
-                            knnAlgorithm.getStringValue() + "-" +
-                            chunkModel.getStringValue();
-                    createIndex(indexName, paragraph.getContext());
-
-
-                    for (final var completionModel : CompletionModel.values()) {
-
-                        chatBotService.setCompletionModel(completionModel);
-                        if (completionModel.equals(CompletionModel.OPEN_AI)) {
-                            chatBotService.setCompletionApiKey(apiKeysConfig.getOpenAiKey());
+                    AtomicBoolean shouldCreateNewIndexes = new AtomicBoolean(true);
+                    CHUNK_SIZE_OVERLAP_PAIRS.forEach((chunkSize, chunkOverlap) -> {
+                        chatBotService.setEmbeddingModel(embeddingModel);
+                        chatBotService.setKnnAlgorithm(knnAlgorithm);
+                        chatBotService.setChunkModel(chunkModel);
+                        if (embeddingModel.equals(EmbeddingModel.OPEN_AI)) {
+                            chatBotService.setEmbeddingApiKey(apiKeysConfig.getOpenAiKey());
                         } else {
-                            chatBotService.setCompletionApiKey(apiKeysConfig.getNplCloudKey());
+                            chatBotService.setEmbeddingApiKey(apiKeysConfig.getNplCloudKey());
                         }
 
-                        final var score = ParagraphScore.builder()
-                                .wins(0)
-                                .misses(0)
-                                .paragraphContext(paragraph.getContext())
-                                .embeddingModel(embeddingModel)
-                                .completionModel(completionModel)
-                                .knnAlgorithm(knnAlgorithm)
-                                .chunkModel(chunkModel)
-                                .build();
-                        paragraph.getQas().forEach(qa ->
-                                evaluateQa(indexName, qa, score)
-                        );
 
-                        scores.add(score);
-                    }
+                        final var indexName = "thesis-" +
+                                embeddingModel.getStringValue() + "-" +
+                                knnAlgorithm.getStringValue() + "-" +
+                                chunkModel.getStringValue();
 
-                    deleteIndex(indexName);
+                        if (shouldCreateNewIndexes.get()) {
+                            createIndex(indexName, paragraph.getContext());
+                        }
+
+
+                        for (final var completionModel : CompletionModel.values()) {
+                            chatBotService.setCompletionModel(completionModel);
+                            if (completionModel.equals(CompletionModel.OPEN_AI)) {
+                                chatBotService.setCompletionApiKey(apiKeysConfig.getOpenAiKey());
+                            } else {
+                                chatBotService.setCompletionApiKey(apiKeysConfig.getNplCloudKey());
+                            }
+
+                            K_VALUES.forEach(k -> {
+                                if (chunkModel.equals(ChunkModel.ARBITRARY)) {
+                                    chatBotService.setChunkSize(chunkSize);
+                                    chatBotService.setChunkOverlap(chunkOverlap);
+                                    chatBotService.setDefaultK(k);
+
+                                    log.info("Evaluating with " + embeddingModel + " " + knnAlgorithm + " " + chunkModel + " " + completionModel + " " + chunkSize + " " + chunkOverlap + " " + k);
+                                    evaluate(
+                                            paragraph,
+                                            scores,
+                                            embeddingModel,
+                                            knnAlgorithm,
+                                            chunkModel,
+                                            indexName,
+                                            completionModel,
+                                            k,
+                                            chunkSize,
+                                            chunkOverlap
+                                    );
+                                } else {
+
+                                    if (scores.stream().noneMatch(
+                                            s -> s.hasEqualValues(
+                                                    embeddingModel,
+                                                    completionModel,
+                                                    knnAlgorithm,
+                                                    chunkModel,
+                                                    0,
+                                                    0,
+                                                    k
+                                            )
+                                    )) {
+                                        log.info("Evaluating with " + embeddingModel + " " + knnAlgorithm + " " + chunkModel + " " + completionModel + " " + 0 + " " + 0 + " " + k);
+                                        evaluate(
+                                                paragraph,
+                                                scores,
+                                                embeddingModel,
+                                                knnAlgorithm,
+                                                chunkModel,
+                                                indexName,
+                                                completionModel,
+                                                k,
+                                                0,
+                                                0
+                                        );
+                                    }
+                                }
+
+                            });
+                        }
+
+                        if (chunkModel.equals(ChunkModel.SENTENCES)) {
+                            shouldCreateNewIndexes.set(false);
+                        }
+                        if (shouldCreateNewIndexes.get()){
+                            deleteIndex(indexName);
+                        }
+                    });
                 }
             }
         }
         return scores;
     }
 
+    private void evaluate(SquadParagraph paragraph, ArrayList<ParagraphScore> scores, EmbeddingModel embeddingModel, KnnAlgorithm knnAlgorithm, ChunkModel chunkModel, String indexName, CompletionModel completionModel, Integer k, Integer chunkSize, Integer chunkOverlap) {
+        final var score = ParagraphScore.builder()
+                .wins(0)
+                .misses(0)
+                .paragraphContext(paragraph.getContext())
+                .embeddingModel(embeddingModel)
+                .completionModel(completionModel)
+                .knnAlgorithm(knnAlgorithm)
+                .chunkModel(chunkModel)
+                .chunkSize(chunkSize)
+                .chunkOverlap(chunkOverlap)
+                .k(k)
+                .build();
+        paragraph.getQas().forEach(qa ->
+                evaluateQa(indexName, qa, score)
+        );
+
+        scores.add(score);
+    }
+
     private void evaluateQa(String indexName, SquadQa qa, ParagraphScore score) {
-        log.info("Question: " + qa.getQuestion());
         final var answer = chatBotService.query(
                 QueryCompletionModelRequest.builder()
                         .indexName(indexName)
-                        .k(5)
                         .query(qa.getQuestion())
                         .build()
         );
+        if (qa.getIs_impossible()) {
+            if (answer.equalsIgnoreCase("I don't know the answer.")) {
+                score.countWin();
+            } else {
+//                logMiss(indexName, qa, answer);
+                score.countMiss();
+            }
+
+        } else {
+            if (
+                    qa.getAnswers().stream().anyMatch(givenAnswer -> {
+                        final var a1 = formatAnswer(answer);
+                        final var a2 = formatAnswer(givenAnswer.getText());
+                        return a1.contains(a2) || a2.contains(a1);
+                    })
+            ) {
+                score.countWin();
+            } else {
+//                logMiss(indexName, qa, answer);
+                score.countMiss();
+            }
+        }
+
+//        log.info("Current wins: " + score.getWins());
+//        log.info("Current misses: " + score.getMisses());
+//        log.info("");
+    }
+
+    private void logMiss(String indexName, SquadQa qa, String answer) {
+        log.info("Missed Question: " + qa.getQuestion());
         log.info("Answer: " + answer);
         log.info("Given Answers: " +
                 String.join(" || ", qa.getAnswers().stream()
                         .map(SquadAnswer::getText)
                         .collect(Collectors.toSet()))
         );
-        if (qa.getIs_impossible()) {
-            if (answer.equalsIgnoreCase("I don't know the answer.")) {
-                score.countWin();
-            } else {
-                score.countMiss();
-            }
-
-        } else {
-            if (
-                    qa.getAnswers().stream().anyMatch(givenAnswer ->
-                            answer.contains(givenAnswer.getText()) || givenAnswer.getText().contains(answer)
-                    )
-            ) {
-                score.countWin();
-            } else {
-                score.countMiss();
-            }
-        }
-
-        log.info("");
-        log.info("Current wins: " + score.getWins());
-        log.info("Current misses: " + score.getMisses());
-        log.info("");
+        log.info("Context");
+        final var embeddings = chatBotService.findKNearest(
+                indexName, qa.getQuestion(), 5
+        );
+        embeddings.stream().map(Embedding::getIndex).forEach(log::info);
         log.info("");
     }
 
@@ -359,12 +455,21 @@ public class TestController {
         return List.of(response);
     }
 
-    private static void sleep(int millis) {
+    private void sleep(int millis) {
         try {
             Thread.sleep(millis);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private String formatAnswer(String s) {
+        return s.replace(",", "")
+                .replace(".", "")
+                .replace(" and ", "")
+                .replace(" the ", "")
+                .replace(" ", "")
+                .toLowerCase();
     }
 
 }
